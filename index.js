@@ -1,3 +1,10 @@
+var antialiasing = false;
+var shadows = false;
+var ambientOnly = false;
+var specular = false;
+var lambert = false;
+
+
 // # Raytracing
 //
 // **Raytracing** is a relatively simple way to render images of 3D objects.
@@ -42,6 +49,7 @@ c.height = height;
 c.style.cssText = 'width:' + (width * 2) + 'px;height:' + (height*2) + 'px';
 var ctx = c.getContext('2d'),
     data = ctx.getImageData(0, 0, width, height);
+    // data = new ImageData(width, height);
 
 // # The Scene
 var scene = {};
@@ -80,7 +88,7 @@ scene.camera = {
 // Lights are defined only as points in space - surfaces that have lambert
 // shading will be affected by any visible lights.
 scene.lights = [{
-    x: -30,
+    x: 30,
     y: -10,
     z: 20
 }];
@@ -92,6 +100,7 @@ scene.lights = [{
 scene.objects = [
     {
         type: 'sphere',
+        id: 'BigSphere',
         point: {
             x: 0,
             y: 3.5,
@@ -103,43 +112,45 @@ scene.objects = [
             z: 155
         },
         specular: 0.2,
-        lambert: 0.7,
+        lambert: 0.6,
         ambient: 0.1,
         radius: 3
     },
     {
         type: 'sphere',
+        id: 'SmallSphere1',
         point: {
             x: -4,
             y: 2,
             z: -1
         },
         color: {
-            x: 155,
+            x: 200,
             y: 155,
             z: 155
         },
         specular: 0.1,
         lambert: 0.9,
-        ambient: 0.0,
+        ambient: 0.1,
         radius: 0.2
     },
     {
         type: 'sphere',
+        id: 'SmallSphere2',
         point: {
             x: -4,
             y: 3,
             z: -1
         },
         color: {
-            x: 255,
-            y: 255,
-            z: 255
+            x: 155,
+            y: 155,
+            z: 200
         },
         specular: 0.2,
         lambert: 0.7,
         ambient: 0.1,
-        radius: 0.1
+        radius: 0.5
     }
 ];
 
@@ -200,8 +211,10 @@ function render(scene) {
     var ray = {
         point: camera.point
     };
-    for (var x = 0; x < width; x++) {
-        for (var y = 0; y < height; y++) {
+
+    var rayResults = []
+    for (var y = 0; y < height; y++) {
+        for (var x = 0; x < width; x++) {
 
             // turn the raw pixel `x` and `y` values into values from -1 to 1
             // and use these values to scale the facing-right and facing-up
@@ -214,18 +227,87 @@ function render(scene) {
 
             // use the vector generated to raytrace the scene, returning a color
             // as a `{x, y, z}` vector of RGB values
-            color = trace(ray, scene, 0);
-            index = (x * 4) + (y * width * 4),
-            data.data[index + 0] = color.x;
-            data.data[index + 1] = color.y;
-            data.data[index + 2] = color.z;
-            data.data[index + 3] = 255;
+            colorAndObj = trace(ray, scene, 0);
+            // index = (x * 4) + (y * width * 4),
+            // data.data[index + 0] = color.x;
+            // data.data[index + 1] = color.y;
+            // data.data[index + 2] = color.z;
+            // data.data[index + 3] = 255;
+
+            rayResults.push([
+                    colorAndObj.color.x,
+                    colorAndObj.color.y,
+                    colorAndObj.color.z,
+                    255,
+                    colorAndObj.object.id
+                ])
         }
     }
+
+    if (antialiasing) {
+        rayResults = antialias(rayResults, width, height)        
+    }
+
+    encodeIntoData(rayResults, data)
 
     // Now that each ray has returned and populated the `data` array with
     // correctly lit colors, fill the canvas with the generated data.
     ctx.putImageData(data, 0, 0);
+}
+
+
+function antialias(rayResults) {
+    return rayResults.map((result, index) => {
+        var horizontalIndex = index % width;
+        var horizontalIndices = [-1, 0, 1].map(function(i) { return i + horizontalIndex}).filter(function(i) { return i >= 0 && i < width});
+        var verticalIndex = (index - (index % width)) / width;
+        var verticalIndices = [-1, 0, 1].map(function(i) { return i + verticalIndex}).filter(function(i) { return i >= 0 && i < height});
+
+        var sample = []
+        verticalIndices.forEach(function(vIndex) {
+            horizontalIndices.forEach(function(hIndex) {
+                sample.push(rayResults[vIndex * width + hIndex])
+            })
+        })
+
+        var objectsHitBySample = {}
+        sample.forEach(function(sampleRay) {
+            if (!objectsHitBySample[sampleRay[4]]) {
+                objectsHitBySample[sampleRay[4]] = true;
+            }
+        })
+
+        if (Object.keys(objectsHitBySample).length > 1) {
+            var accumulatedRay = sample.reduce(function(accRay, ray) { 
+                return [
+                    accRay[0] + ray[0],
+                    accRay[1] + ray[1],
+                    accRay[2] + ray[2],
+                    accRay[3] + ray[3]
+                ]
+            })
+
+            return [
+                accumulatedRay[0] / sample.length,
+                accumulatedRay[1] / sample.length,
+                accumulatedRay[2] / sample.length,
+                accumulatedRay[3] / sample.length,
+                result[4]
+            ]
+        } else {
+            return result
+        }
+    })
+}
+
+function encodeIntoData(rayResults, data) {
+    rayResults.forEach((result, index) => {
+        var indexStart = index * 4
+        data.data[indexStart] = result[0];
+        data.data[indexStart + 1] = result[1];
+        data.data[indexStart + 2] = result[2];
+        data.data[indexStart + 3] = result[3];
+    })
 }
 
 // # Trace
@@ -240,14 +322,14 @@ function trace(ray, scene, depth) {
     // to find what the ray reflected into. Since this could easily go
     // on forever, first check that we haven't gone more than three bounces
     // into a reflection.
-    if (depth > 3) return;
+    if (depth > 3) return {color: undefined, object: undefined};
 
     var distObject = intersectScene(ray, scene);
 
     // If we don't hit anything, fill this pixel with the background color -
     // in this case, white.
     if (distObject[0] === Infinity) {
-        return Vector.WHITE;
+        return {color:Vector.ZERO, object: {id: "NO_OBJECT"}};
     }
 
     var dist = distObject[0],
@@ -259,7 +341,8 @@ function trace(ray, scene, depth) {
     // returned by the intersection check.
     var pointAtTime = Vector.add(ray.point, Vector.scale(ray.vector, dist));
 
-    return surface(ray, scene, object, pointAtTime, sphereNormal(object, pointAtTime), depth);
+    var color = surface(ray, scene, object, pointAtTime, sphereNormal(object, pointAtTime), depth);
+    return {color: color, object: object};
 }
 
 // # Detecting collisions against all objects
@@ -339,12 +422,14 @@ function surface(ray, scene, object, pointAtTime, normal, depth) {
     // **[Lambert shading](http://en.wikipedia.org/wiki/Lambertian_reflectance)**
     // is our pretty shading, which shows gradations from the most lit point on
     // the object to the least.
-    if (object.lambert) {
+    if (lambert && object.lambert) {
         for (var i = 0; i < scene.lights.length; i++) {
             var lightPoint = scene.lights[i];
             // First: can we see the light? If not, this is a shadowy area
             // and it gets no light from the lambert shading process.
-            if (!isLightVisible(pointAtTime, scene, lightPoint)) continue;
+            if (shadows) {
+              if (!isLightVisible(pointAtTime, scene, lightPoint)) continue;  
+            }
             // Otherwise, calculate the lambertian reflectance, which
             // essentially is a 'diffuse' lighting system - direct light
             // is bright, and from there, less direct light is gradually,
@@ -360,7 +445,7 @@ function surface(ray, scene, object, pointAtTime, normal, depth) {
     // **[Specular](https://en.wikipedia.org/wiki/Specular_reflection)** is a fancy word for 'reflective': rays that hit objects
     // with specular surfaces bounce off and acquire the colors of other objects
     // they bounce into.
-    if (object.specular) {
+    if (specular && object.specular) {
         // This is basically the same thing as what we did in `render()`, just
         // instead of looking from the viewpoint of the camera, we're looking
         // from a point on the surface of a shiny object, seeing what it sees
@@ -369,7 +454,7 @@ function surface(ray, scene, object, pointAtTime, normal, depth) {
             point: pointAtTime,
             vector: Vector.reflectThrough(ray.vector, normal)
         };
-        var reflectedColor = trace(reflectedRay, scene, ++depth);
+        var reflectedColor = trace(reflectedRay, scene, ++depth).color;
         if (reflectedColor) {
             c = Vector.add(c, Vector.scale(reflectedColor, object.specular));
         }
@@ -384,7 +469,7 @@ function surface(ray, scene, object, pointAtTime, normal, depth) {
     // circle.
     return Vector.add3(c,
         Vector.scale(b, lambertAmount * object.lambert),
-        Vector.scale(b, object.ambient));
+        Vector.scale(b, ambientOnly ? 1 : object.ambient));
 }
 
 // Check whether a light is visible from some point on the surface of something.
@@ -449,8 +534,62 @@ function stop() {
     playing = false;
 }
 
+function toggleAmbientOnly() {
+    ambientOnly = !ambientOnly
+    render(scene)
+}
+
+function toggleSpecular() {
+    specular = !specular
+    render(scene)
+}
+
+function toggleLambert() {
+    lambert = !lambert
+    render(scene)
+}
+
+function toggleShadows() {
+    shadows = !shadows
+    render(scene)
+}
+
+function toggleAntialiasing() {
+    antialiasing = !antialiasing
+    render(scene)
+}
+
+function setNewLightCoord(coord) { 
+    return function (event) {
+        var firstLightCoord = scene.lights[0][coord]
+        var newCoord = parseInt(event.target.value)
+        var difference = newCoord - firstLightCoord
+
+        var changePerFrame = difference / 10.0
+
+        setTimeout(() => { updateLightCoord(0, changePerFrame, coord)}, 10)
+    }
+}
+
+function updateLightCoord(i, updateAmount, coord) {
+    scene.lights[0][coord] = scene.lights[0][coord] + updateAmount
+    render(scene)
+
+    if (i < 10) {
+        setTimeout(() => { updateLightCoord(i + 1, updateAmount, coord)}, 10)
+    }
+}
+
 render(scene);
 
 // Then let the user control a cute playing animation!
 document.getElementById('play').onclick = play;
 document.getElementById('stop').onclick = stop;
+document.getElementById('ambient').onclick = toggleAmbientOnly;
+document.getElementById('specular').onclick = toggleSpecular;
+document.getElementById('lambert').onclick = toggleLambert;
+document.getElementById('shadows').onclick = toggleShadows;
+document.getElementById('antialiasing').onclick = toggleAntialiasing;
+document.getElementById('lightx').onchange = setNewLightCoord("x");
+document.getElementById('lighty').onchange = setNewLightCoord("y");
+document.getElementById('lightz').onchange = setNewLightCoord("z");
